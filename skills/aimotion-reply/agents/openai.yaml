@@ -1,0 +1,3 @@
+interface:
+  display_name: "AI Motion 回复"
+  short_description: "每次回答都用 16×16 像素展示感觉"
