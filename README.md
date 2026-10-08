@@ -1,8 +1,26 @@
 # AI Motion
 
-给 Agent 一块不预设图案的 16×16 像素屏幕，观察它在文字之外会怎样表达。网页显示像素动画与回复文字；发布脚本在本机 `127.0.0.1:8765` 提供页面。
+给 Agent 一块不预设图案的 16×16 像素屏幕，观察它在文字之外会怎样表达。GPUI 桌面版以约 246×246 的小窗口常驻桌面，发布回复时自动更新画面。
 
 项目采用 [MIT License](LICENSE)。
+
+## 桌面应用
+
+当前桌面版支持 Linux X11，以及安装了 XWayland 的 Wayland 桌面。使用 [GPUI](https://gpui.rs/) 0.2.2 和 Rust 1.89。需要 Vulkan 驱动、X11/XKB 和 fontconfig 运行库；发行版的开发环境可通过 `libxkbcommon-dev libxkbcommon-x11-dev libfontconfig1-dev` 等包补齐。
+
+```sh
+./scripts/run-desktop.sh
+```
+
+窗口保持置顶，并在所有工作区显示，不抢占输入焦点。左键拖动位置，右键展开或收起回复文字，中键退出。程序通过文件锁保证同一数据目录只有一个实例，退出后下次发布会重新打开。
+
+构建后可安装应用菜单入口和登录自启动：
+
+```sh
+python3 scripts/install-desktop.py
+```
+
+安装项位于 `~/.local/share/applications/ai-motion.desktop` 和 `~/.config/autostart/ai-motion.desktop`。删除对应文件即可取消安装或自启动；安装后的仓库路径需保持有效。
 
 ## 像素协议
 
@@ -30,7 +48,17 @@
 python3 publish.py /path/to/reply.json
 ```
 
-脚本会校验输入、更新本机 `current.json`，并返回展示网址。运行中的网页会自动获取新回复。`current.json`、`reply.json` 和 `preview*.jpg` 是运行或预览数据，不纳入版本控制。
+脚本会校验输入、原子更新本机 `current.json`，自动启动或更新桌面窗口，返回 `desktop: true`。窗口每 200ms 检查新回复，动画移动期间每 20ms 前进一格，完成后停留 300ms。新回复会从正在显示的像素位置开始过渡。
+
+`current.json`、`reply.json`、桌面状态和日志是本机运行数据，不纳入版本控制。
+
+原网页可通过显式浏览器模式使用：
+
+```sh
+python3 publish.py --browser /path/to/reply.json
+```
+
+浏览器模式在 `127.0.0.1:8765` 提供页面并返回展示网址。
 
 展示网址中的 `reply` 参数不会保存历史快照。页面始终读取最新的 `current.json`，旧网址再次打开时也会显示最新回复。
 

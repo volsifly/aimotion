@@ -65,6 +65,44 @@ def ensure_viewer():
     raise RuntimeError(f'无法启动本地预览服务，或端口 {PORT} 已被其他服务占用。')
 
 
+def desktop_is_ready():
+    try:
+        status = json.loads((ROOT / '.desktop-status.json').read_text(encoding='utf-8'))
+        pid = int(status['pid'])
+        if pid <= 0:
+            return False
+        if Path(status['data_file']).resolve() != ROOT / 'current.json':
+            return False
+        os.kill(pid, 0)
+        if sys.platform.startswith('linux'):
+            return Path(f'/proc/{pid}/exe').resolve().name.removesuffix(' (deleted)') == 'aimotion-desktop'
+        return True
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+
+
+def ensure_desktop():
+    if desktop_is_ready():
+        return
+    candidates = [ROOT / 'target/release/aimotion-desktop', ROOT / 'target/debug/aimotion-desktop']
+    binary = next((path for path in candidates if path.is_file()), None)
+    if binary is None:
+        raise RuntimeError('请先运行 scripts/run-desktop.sh 构建并启动桌面渲染器。')
+    with (ROOT / '.desktop.log').open('a', encoding='utf-8') as log:
+        process = subprocess.Popen(
+            [str(binary), '--data-file', str(ROOT / 'current.json')],
+            cwd=ROOT, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+            start_new_session=True,
+        )
+    for _ in range(100):
+        if desktop_is_ready():
+            return
+        if process.poll() is not None:
+            break
+        time.sleep(0.1)
+    raise RuntimeError('桌面窗口未就绪，请检查 .desktop.log 和 DISPLAY；Linux 需要 X11/XWayland。')
+
+
 def publish(payload):
     with tempfile.NamedTemporaryFile('w', encoding='utf-8', dir=ROOT,
                                      prefix='.current-', suffix='.json', delete=False) as handle:
@@ -81,6 +119,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('payload', nargs='?', default='-',
                         help='包含 text、sequence 的 JSON 文件；默认从标准输入读取')
+    parser.add_argument('--browser', action='store_true', help='使用原浏览器展示方式')
     args = parser.parse_args()
     try:
         if args.payload == '-':
@@ -89,10 +128,14 @@ def main():
             with open(args.payload, encoding='utf-8') as handle:
                 source = json.load(handle)
         payload, frame_count = validate(source)
-        ensure_viewer()
         publish(payload)
-        print(json.dumps({'url': f'http://{HOST}:{PORT}/?reply={payload["id"]}',
-                          'frames': frame_count}, ensure_ascii=False))
+        if args.browser:
+            ensure_viewer()
+            result = {'url': f'http://{HOST}:{PORT}/?reply={payload["id"]}', 'frames': frame_count}
+        else:
+            ensure_desktop()
+            result = {'desktop': True, 'id': payload['id'], 'frames': frame_count}
+        print(json.dumps(result, ensure_ascii=False))
     except (OSError, ValueError, json.JSONDecodeError, RuntimeError) as error:
         print(f'发布失败：{error}', file=sys.stderr)
         return 1

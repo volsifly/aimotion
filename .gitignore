@@ -2,3 +2,7 @@ current.json
 reply.json
 preview*.jpg
 __pycache__/
+target/
+.desktop.lock
+.desktop-status.json
+.desktop.log
