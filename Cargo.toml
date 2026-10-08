@@ -18,4 +18,3 @@ incremental = false
 
 [profile.release]
 strip = true
-
