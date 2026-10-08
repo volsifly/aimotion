@@ -2,13 +2,15 @@ use aimotion_desktop::{GRID, Player, Reply};
 use fs2::FileExt;
 use gpui::{prelude::*, *};
 use std::{collections::HashSet, fs, fs::OpenOptions, path::PathBuf, sync::mpsc, time::{Duration, Instant}};
+use std::sync::{Arc, atomic::{AtomicU32, Ordering}};
+mod tray;
 
 struct MotionView {
     player: Player,
 }
 
 impl MotionView {
-    fn new(path: PathBuf, cx: &mut Context<Self>) -> Self {
+    fn new(path: PathBuf, commands: mpsc::Receiver<tray::Command>, native_window: Arc<AtomicU32>, cx: &mut Context<Self>) -> Self {
         let (sender, receiver) = mpsc::channel();
         std::thread::spawn(move || {
             let mut last_bytes = Vec::new();
@@ -26,9 +28,25 @@ impl MotionView {
             }
         });
         cx.spawn(async move |this, cx| {
+            let mut visible = true;
             loop {
                 Timer::after(Duration::from_millis(20)).await;
                 if this.update(cx, |view, cx| {
+                    for command in commands.try_iter() {
+                        let desired = match command {
+                            tray::Command::Quit => { cx.quit(); return; }
+                            tray::Command::Toggle => !visible,
+                            tray::Command::Show => true,
+                            tray::Command::Hide => false,
+                        };
+                        let window = native_window.load(Ordering::Acquire);
+                        if window != 0 {
+                            match tray::set_visible(window, desired) {
+                                Ok(()) => visible = desired,
+                                Err(error) => eprintln!("Unable to change window visibility: {error}"),
+                            }
+                        }
+                    }
                     let now = Instant::now();
                     let mut changed = false;
                     // Apply only the newest reply if publishing outruns the UI.
@@ -67,7 +85,7 @@ impl Render for MotionView {
 
 // EWMH keeps the widget above other windows and visible on every workspace.
 // GPUI uses X11 here, including XWayland on GNOME Wayland sessions.
-fn pin_window(pid: u32) -> Result<u32, Box<dyn std::error::Error>> {
+fn pin_window(pid: u32, has_tray: bool) -> Result<u32, Box<dyn std::error::Error>> {
     use x11rb::{connection::Connection, protocol::xproto::*, wrapper::ConnectionExt as _};
     let (connection, screen) = x11rb::connect(None)?;
     let root = connection.setup().roots[screen].root;
@@ -87,6 +105,10 @@ fn pin_window(pid: u32) -> Result<u32, Box<dyn std::error::Error>> {
             if value.value32().and_then(|mut values| values.next()) != Some(pid) { continue; }
             let mask = EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY;
             connection.send_event(false, root, mask, ClientMessageEvent::new(32, window, state, [1, above, sticky, 1, 0]))?;
+            if has_tray {
+                connection.send_event(false, root, mask, ClientMessageEvent::new(32, window, state,
+                    [1, atom("_NET_WM_STATE_SKIP_TASKBAR")?, atom("_NET_WM_STATE_SKIP_PAGER")?, 1, 0]))?;
+            }
             connection.send_event(false, root, mask, ClientMessageEvent::new(32, window, desktop, [u32::MAX, 1, 0, 0, 0]))?;
             connection.change_property32(PropMode::REPLACE, window, atom("_MOTIF_WM_HINTS")?, atom("_MOTIF_WM_HINTS")?, &[2, 0, 0, 0, 0])?;
             connection.flush()?;
@@ -111,6 +133,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let status_path = root.join(".desktop-status.json");
     let _ = fs::remove_file(&status_path);
     let pid = std::process::id();
+    use ksni::blocking::TrayMethods;
+    let (tray_sender, tray_receiver) = mpsc::channel();
+    let tray_handle = match tray::MotionTray(tray_sender).spawn() {
+        Ok(handle) => Some(handle),
+        Err(error) => { eprintln!("Tray unavailable; keeping taskbar entry: {error}"); None }
+    };
+    let has_tray = tray_handle.is_some();
+    let native_window = Arc::new(AtomicU32::new(0));
     Application::new().run(move |cx: &mut App| {
         cx.on_window_closed(|cx| if cx.windows().is_empty() { cx.quit(); }).detach();
         let bounds = cx.primary_display().map(|display| {
@@ -126,16 +156,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             window_decorations: Some(WindowDecorations::Client),
             app_id: Some("ai-motion".into()),
             ..Default::default()
-        }, |_, cx| cx.new(|cx| MotionView::new(data_file.clone(), cx))).expect("Unable to create GPUI window");
-        std::thread::spawn(move || match pin_window(pid) {
+        }, |_, cx| cx.new(|cx| MotionView::new(data_file.clone(), tray_receiver, native_window.clone(), cx))).expect("Unable to create GPUI window");
+        std::thread::spawn(move || match pin_window(pid, has_tray) {
             Ok(window) => {
-                let status = serde_json::json!({"pid": pid, "window": window, "backend": "gpui-x11", "data_file": data_file});
+                native_window.store(window, Ordering::Release);
+                let status = serde_json::json!({"pid": pid, "window": window, "backend": "gpui-x11", "tray": has_tray, "data_file": data_file});
                 if let Err(error) = fs::write(status_path, status.to_string()) { eprintln!("Status write failed: {error}"); }
             }
             Err(error) => eprintln!("Unable to pin desktop window: {error}"),
         });
     });
     let _ = fs::remove_file(root.join(".desktop-status.json"));
+    drop(tray_handle);
     drop(lock);
     Ok(())
 }
