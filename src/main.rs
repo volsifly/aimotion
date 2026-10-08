@@ -5,7 +5,6 @@ use std::{collections::HashSet, fs, fs::OpenOptions, path::PathBuf, sync::mpsc, 
 
 struct MotionView {
     player: Player,
-    expanded: bool,
 }
 
 impl MotionView {
@@ -44,31 +43,24 @@ impl MotionView {
                 }).is_err() { break; }
             }
         }).detach();
-        Self { player: Player::default(), expanded: false }
+        Self { player: Player::default() }
     }
 }
 
 impl Render for MotionView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let lit: HashSet<_> = self.player.positions().into_iter().collect();
         let mut content = div().flex().flex_col().gap(px(2.)).p(px(12.)).bg(rgb(0x101414))
             .on_mouse_down(MouseButton::Left, |_, window, _| window.start_window_move())
-            .on_mouse_down(MouseButton::Middle, |_, _, cx| cx.quit())
-            .on_mouse_down(MouseButton::Right, cx.listener(|view, _, window, cx| {
-                view.expanded = !view.expanded;
-                window.resize(size(px(246.), px(if view.expanded { 420. } else { 246. })));
-                cx.notify();
-            }));
+            .on_mouse_down(MouseButton::Middle, |_, _, cx| cx.quit());
         for row in 0..GRID {
             content = content.child(div().flex().gap(px(2.)).children((0..GRID).map(|column| {
                 div().size(px(12.)).rounded(px(2.)).bg(rgb(if lit.contains(&(row * GRID + column)) { 0xbfff5c } else { 0x202b29 }))
             })));
         }
-        if self.expanded {
-            content = content.child(div().id("reply").mt(px(10.)).h(px(162.)).w(px(222.))
-                .overflow_y_scroll().text_size(px(13.)).text_color(rgb(0xedf4ec))
-                .child(self.player.text.clone()));
-        }
+        content = content.child(div().id("reply").mt(px(10.)).h(px(81.)).w(px(222.))
+            .overflow_y_scroll().text_size(px(13.)).text_color(rgb(0xedf4ec))
+            .child(self.player.text.clone()));
         content
     }
 }
@@ -123,8 +115,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         cx.on_window_closed(|cx| if cx.windows().is_empty() { cx.quit(); }).detach();
         let bounds = cx.primary_display().map(|display| {
             let screen = display.bounds();
-            Bounds::new(point(screen.origin.x + screen.size.width - px(270.), screen.origin.y + px(48.)), size(px(246.), px(246.)))
-        }).unwrap_or_else(|| Bounds::centered(None, size(px(246.), px(246.)), cx));
+            Bounds::new(point(screen.origin.x + screen.size.width - px(270.), screen.origin.y + px(48.)), size(px(246.), px(339.)))
+        }).unwrap_or_else(|| Bounds::centered(None, size(px(246.), px(339.)), cx));
         cx.open_window(WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: Some(TitlebarOptions { title: Some("AI Motion".into()), ..Default::default() }),
